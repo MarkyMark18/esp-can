@@ -5,7 +5,6 @@
 #include "freertos/task.h"
 #include "esp_twai.h"
 #include "esp_twai_onchip.h"
-#include "esp_timer.h"
 
 
 #define CAN_OUTPUT_TASK_STACK_SIZE 4096 
