@@ -1,6 +1,5 @@
 build/
 managed_components/
 .vscode/
-sdkconfig
 sdkconfig.old
 .clangd

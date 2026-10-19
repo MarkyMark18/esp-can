@@ -5,6 +5,8 @@
 #include "freertos/task.h"
 #include "esp_twai.h"
 #include "esp_twai_onchip.h"
+#include "esp_timer.h"
+
 
 #define CAN_OUTPUT_TASK_STACK_SIZE 4096 
 #define CAN_OUTPUT_TASK_PRIORITY 1
@@ -24,6 +26,8 @@ typedef struct {
 // Counter for tracking number of dropped frames (When queue is full)
 static volatile uint32_t dropped_frame_ctr;
 
+
+
 static QueueHandle_t can_frame_queue;
 
 void can_output_task(void *pvParameters) {
@@ -31,25 +35,37 @@ void can_output_task(void *pvParameters) {
     for(;;) {
         can_frame_t recd_frame;
         if (xQueueReceive(can_frame_queue, &recd_frame, (pdMS_TO_TICKS(1000)))) {
-            printf("Frame received with ID: %" PRIu32 "\n", recd_frame.id);
-            printf("Frame data length: %u\n", recd_frame.dlc);
-            printf("Frame data buffer contents: ");
-            for (int i = 0; i < recd_frame.dlc; i++) {
-                printf("%02X ", recd_frame.data[i]);
+            char data_buf[28] = {0};
+            size_t pos = 0;
+
+            for (uint8_t i=0; i < recd_frame.dlc; i++) {
+                int n = snprintf(data_buf + pos, sizeof(data_buf) - pos, "%02X ", recd_frame.data[i]);
+                pos += n;
             }
-            printf("\n");
+
+            char output_buf[256] = {0};
+            snprintf(
+                output_buf, 
+                sizeof(output_buf), 
+                "ID: %" PRIX32 ", Data Len: %u, Data: %s\n",
+                recd_frame.id,
+                recd_frame.dlc,
+                data_buf
+            );
+
+            printf("%s", output_buf);
         }
+
         else {
-            printf("The queue is empty!\n");
+            printf("Current Dropped Frames: %" PRIu32 "\n", dropped_frame_ctr);
         }
     }
-
 }
 
 // TWAI receive callback
 static bool twai_rx_cb(twai_node_handle_t node_hdl, const twai_rx_done_event_data_t *evt_data, void *user_ctx) {
 
-    uint8_t recv_buff[8];
+    uint8_t recv_buff[8] = {0};
     twai_frame_t twai_rx_frame = {
         .buffer = recv_buff,
         .buffer_len = sizeof(recv_buff)
@@ -62,7 +78,10 @@ static bool twai_rx_cb(twai_node_handle_t node_hdl, const twai_rx_done_event_dat
             .is_rtr = twai_rx_frame.header.rtr,
             .is_extended_id = twai_rx_frame.header.ide
         };
-        memcpy(can_rx_frame.data, twai_rx_frame.buffer, twai_rx_frame.header.dlc);
+
+        size_t data_len = twai_rx_frame.header.dlc < sizeof(can_rx_frame.data) ? twai_rx_frame.header.dlc : sizeof(can_rx_frame.data);
+
+        memcpy(can_rx_frame.data, twai_rx_frame.buffer, data_len);
 
         if (!xQueueSendFromISR(can_frame_queue, &can_rx_frame, NULL)) {
             dropped_frame_ctr++;
@@ -70,6 +89,31 @@ static bool twai_rx_cb(twai_node_handle_t node_hdl, const twai_rx_done_event_dat
         }
     }
     return true;
+}
+
+void transmit_test_twai_frames(uint32_t no_of_frames, twai_node_handle_t twai_node_hdl) {
+
+    for (uint32_t i=0; i < no_of_frames; i++) {
+        size_t data_len = i % 9;
+
+        uint8_t test_buf[8] = {0};
+
+        for (uint8_t j=0; j < 8; j++) {
+            test_buf[j] = i + j;
+        }
+
+        twai_frame_t test_twai_frame = {
+            .header.id = i,
+            .header.ide = false,
+            .buffer = test_buf,
+            .buffer_len = data_len,
+            .header.dlc = data_len
+        };
+
+        ESP_ERROR_CHECK(twai_node_transmit(twai_node_hdl, &test_twai_frame, 0)); 
+        ESP_ERROR_CHECK(twai_node_transmit_wait_all_done(twai_node_hdl, -1));
+    }
+
 }
 
 void app_main(void)
@@ -127,17 +171,5 @@ void app_main(void)
 
     ESP_ERROR_CHECK(twai_node_enable(twai_node_hdl));
 
-    // Transmit a test TWAI frame
-    uint8_t test_buf[8] = {0, 1, 2, 3, 4, 5, 6, 7};
-
-    twai_frame_t test_twai_frame = {
-        .header.id = 0x1,
-        .header.ide = false,
-        .buffer = test_buf,
-        .buffer_len = sizeof(test_buf),
-        .header.dlc = sizeof(test_buf)
-    };
-
-    ESP_ERROR_CHECK(twai_node_transmit(twai_node_hdl, &test_twai_frame, 0));
-    ESP_ERROR_CHECK(twai_node_transmit_wait_all_done(twai_node_hdl, -1));
+    transmit_test_twai_frames(10000, twai_node_hdl);
 }
