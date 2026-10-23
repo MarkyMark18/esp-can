@@ -1,17 +1,32 @@
 #include <stdio.h>
 #include <inttypes.h>
+#include <string.h>
+
+#include "test_functions.h"
+
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_twai.h"
 #include "esp_twai_onchip.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+// FLAG FOR ENABLING BENCH TEST MODE
+// WARNING: Do not uncomment if device is connected to car's CAN bus!
+// #define BENCH_TEST_MODE
+
+#ifdef BENCH_TEST_MODE
+    #define TWAI_RX_PIN 47
+    #define TWAI_TX_PIN 47
+#else
+    #define TWAI_RX_PIN 5
+    #define TWAI_TX_PIN 6
+#endif
 
 #define CAN_OUTPUT_TASK_STACK_SIZE 4096 
 #define CAN_OUTPUT_TASK_PRIORITY 1
 
-#define TWAI_RX_PIN 17
-#define TWAI_TX_PIN 17
+
 #define TWAI_BITRATE 500000
 
 typedef struct {
@@ -24,8 +39,6 @@ typedef struct {
 
 // Counter for tracking number of dropped frames (When queue is full)
 static volatile uint32_t dropped_frame_ctr;
-
-
 
 static QueueHandle_t can_frame_queue;
 
@@ -84,36 +97,11 @@ static bool twai_rx_cb(twai_node_handle_t node_hdl, const twai_rx_done_event_dat
 
         if (!xQueueSendFromISR(can_frame_queue, &can_rx_frame, NULL)) {
             dropped_frame_ctr++;
-            return false;
         }
     }
-    return true;
+    return false;
 }
 
-void transmit_test_twai_frames(uint32_t no_of_frames, twai_node_handle_t twai_node_hdl) {
-
-    for (uint32_t i=0; i < no_of_frames; i++) {
-        size_t data_len = i % 9;
-
-        uint8_t test_buf[8] = {0};
-
-        for (uint8_t j=0; j < 8; j++) {
-            test_buf[j] = i + j;
-        }
-
-        twai_frame_t test_twai_frame = {
-            .header.id = i,
-            .header.ide = false,
-            .buffer = test_buf,
-            .buffer_len = data_len,
-            .header.dlc = data_len
-        };
-
-        ESP_ERROR_CHECK(twai_node_transmit(twai_node_hdl, &test_twai_frame, 0)); 
-        ESP_ERROR_CHECK(twai_node_transmit_wait_all_done(twai_node_hdl, -1));
-    }
-
-}
 
 void app_main(void)
 {   
@@ -143,20 +131,26 @@ void app_main(void)
 
     if (can_output_task_returned != pdPASS ) {
         printf("Failed to create CAN output task!!\n");
+        return;
     }
 
     // Create a TWAI node for receiving CAN messages from the transceiver
-    // NOTE: In loopback mode currently for testing
     twai_node_handle_t twai_node_hdl = NULL;
-
     twai_onchip_node_config_t twai_node_cfg = {
-        .io_cfg.tx = TWAI_TX_PIN,
         .io_cfg.rx = TWAI_RX_PIN,
         .bit_timing.bitrate = TWAI_BITRATE,
-        .flags.enable_self_test = true,
-        .flags.enable_loopback = true,
-        .tx_queue_depth = 5
     };
+
+    #ifdef BENCH_TEST_MODE
+        printf("TEST MODE ENABLED! WARNING: DO NOT USE WHEN CONNECTED TO CAR\n");
+        twai_node_cfg.io_cfg.tx = TWAI_TX_PIN,
+        twai_node_cfg.flags.enable_self_test = true;
+        twai_node_cfg.flags.enable_loopback = true;
+        twai_node_cfg.tx_queue_depth = 5;
+    #else
+        printf("TEST MODE DISABLED! DEVICE WILL OPERATE IN LISTEN ONLY MODE\n");
+        twai_node_cfg.flags.enable_listen_only = true;
+    #endif
 
     ESP_ERROR_CHECK(twai_new_node_onchip(&twai_node_cfg, &twai_node_hdl));
 
@@ -167,8 +161,10 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(twai_node_register_event_callbacks(twai_node_hdl, &twai_cbs, NULL));
-
     ESP_ERROR_CHECK(twai_node_enable(twai_node_hdl));
 
-    transmit_test_twai_frames(10000, twai_node_hdl);
+    #ifdef BENCH_TEST_MODE
+        transmit_test_twai_frames(10000, twai_node_hdl);
+    #endif
+
 }
