@@ -14,8 +14,7 @@
 
 // FLAG FOR ENABLING BENCH TEST MODE
 // WARNING: Do not uncomment if device is connected to car's CAN bus!
-// #define BENCH_TEST_MODE
-// #define NO_OF_TEST_FRAMES 1000
+#define BENCH_TEST_MODE
 
 #ifdef BENCH_TEST_MODE
     #define TWAI_RX_PIN 47
@@ -45,31 +44,43 @@ static volatile uint32_t dropped_frame_ctr;
 
 static QueueHandle_t can_frame_queue;
 
+static can_frame_t can_frame_tbl[2048] = {0};
+
+void print_can_frame(can_frame_t *frame) {
+    char data_buf[28] = {0};
+    size_t pos = 0;
+
+    for (uint8_t i=0; i < frame->dlc; i++) {
+        int n = snprintf(data_buf + pos, sizeof(data_buf) - pos, "%02X ", frame->data[i]);
+        pos += n;
+    }
+
+    char output_buf[256] = {0};
+    snprintf(
+        output_buf, 
+        sizeof(output_buf), 
+        "Timestamp: %" PRIi64 ", ID: %" PRIX32 ", Data Len: %u, Data: %s\n",
+        frame->timestamp,
+        frame->id,
+        frame->dlc,
+        data_buf
+    );
+
+    printf("%s", output_buf);
+}
+
 void can_output_task(void *pvParameters) {
 
     for(;;) {
         can_frame_t recd_frame;
         if (xQueueReceive(can_frame_queue, &recd_frame, (pdMS_TO_TICKS(1000)))) {
-            char data_buf[28] = {0};
-            size_t pos = 0;
-
-            for (uint8_t i=0; i < recd_frame.dlc; i++) {
-                int n = snprintf(data_buf + pos, sizeof(data_buf) - pos, "%02X ", recd_frame.data[i]);
-                pos += n;
+            if (memcmp(&recd_frame.data, &can_frame_tbl[recd_frame.id].data, 8) != 0) {
+                can_frame_tbl[recd_frame.id] = recd_frame;
+                print_can_frame(&can_frame_tbl[recd_frame.id]);
             }
-
-            char output_buf[256] = {0};
-            snprintf(
-                output_buf, 
-                sizeof(output_buf), 
-                "Timestamp: %" PRIi64 ", ID: %" PRIX32 ", Data Len: %u, Data: %s\n",
-                recd_frame.timestamp,
-                recd_frame.id,
-                recd_frame.dlc,
-                data_buf
-            );
-
-            printf("%s", output_buf);
+            else {
+                printf("No change in frame with ID %" PRIX32 "\n", recd_frame.id);
+            }
         }
 
         else {
