@@ -169,7 +169,7 @@ void app_main(void)
     ESP_ERROR_CHECK(twai_node_enable(twai_node_hdl));
 
     #ifdef BENCH_TEST_MODE
-        transmit_test_twai_frames(NO_OF_TEST_FRAMES, twai_node_hdl);
+        transmit_test_twai_frames(CAN_TEST_FRAME_DATA_BYTE_CHG, twai_node_hdl);
     #endif
 
 }
