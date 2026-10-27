@@ -4,6 +4,7 @@
 
 #include "test_functions.h"
 
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_twai_onchip.h"
 
@@ -14,6 +15,7 @@
 // FLAG FOR ENABLING BENCH TEST MODE
 // WARNING: Do not uncomment if device is connected to car's CAN bus!
 // #define BENCH_TEST_MODE
+// #define NO_OF_TEST_FRAMES 1000
 
 #ifdef BENCH_TEST_MODE
     #define TWAI_RX_PIN 47
@@ -35,6 +37,7 @@ typedef struct {
     uint8_t dlc;
     bool is_rtr;
     bool is_extended_id;
+    int64_t timestamp;
 } can_frame_t;
 
 // Counter for tracking number of dropped frames (When queue is full)
@@ -59,7 +62,8 @@ void can_output_task(void *pvParameters) {
             snprintf(
                 output_buf, 
                 sizeof(output_buf), 
-                "ID: %" PRIX32 ", Data Len: %u, Data: %s\n",
+                "Timestamp: %" PRIi64 ", ID: %" PRIX32 ", Data Len: %u, Data: %s\n",
+                recd_frame.timestamp,
                 recd_frame.id,
                 recd_frame.dlc,
                 data_buf
@@ -88,7 +92,8 @@ static bool twai_rx_cb(twai_node_handle_t node_hdl, const twai_rx_done_event_dat
             .id = twai_rx_frame.header.id,
             .dlc = twai_rx_frame.header.dlc,
             .is_rtr = twai_rx_frame.header.rtr,
-            .is_extended_id = twai_rx_frame.header.ide
+            .is_extended_id = twai_rx_frame.header.ide,
+            .timestamp = esp_timer_get_time()
         };
 
         size_t data_len = twai_rx_frame.header.dlc < sizeof(can_rx_frame.data) ? twai_rx_frame.header.dlc : sizeof(can_rx_frame.data);
@@ -164,7 +169,7 @@ void app_main(void)
     ESP_ERROR_CHECK(twai_node_enable(twai_node_hdl));
 
     #ifdef BENCH_TEST_MODE
-        transmit_test_twai_frames(10000, twai_node_hdl);
+        transmit_test_twai_frames(NO_OF_TEST_FRAMES, twai_node_hdl);
     #endif
 
 }

@@ -1,8 +1,8 @@
 # esp-can
 
-A simple CAN bus frame sniffing interface, based on the ESP32-S3 and written in C using ESP-IDF and FreeRTOS. 
+A simple CAN bus frame sniffing interface, based on the ESP32-S3 and written in C using ESP-IDF and FreeRTOS.
 
-Initial goals are to sniff CAN frames from my car's (BMW E87) PT-CAN, to learn more about CAN and with a view to use this information in future projects. 
+Initial goals are to sniff CAN frames from my car's (BMW E87) PT-CAN, to learn more about CAN and with a view to use this information in future projects.
 
 ## Status
 
@@ -22,7 +22,7 @@ Initial goals are to sniff CAN frames from my car's (BMW E87) PT-CAN, to learn m
 
 ## Hardware
 
-I am using an Arduino Nano ESP32, with GPIO pin 47 used for both TWAI TX and RX in test bench mode, to enable loopback. Pins 5 (RX) and 6 (TX) have been assigned for use when connecting to the car as a precaution against accidentally transmitting CAN frames to car's PT-CAN. 
+I am using an Arduino Nano ESP32, with GPIO pin 47 used for both TWAI TX and RX in test bench mode, to enable loopback. Pins 5 (RX) and 6 (TX) have been assigned for use when connecting to the car as a precaution against accidentally transmitting CAN frames to car's PT-CAN.
 
 ## Building & Flashing
 
@@ -50,11 +50,10 @@ ID: 3ED, Data Len: 8, Data: ED EE EF F0 F1 F2 F3 F4
 ## Current Limitations
 
 - Self-test loopback only
-- Only configured for standard CAN IDs 
+- Only configured for standard CAN IDs
 - No filtering or logging of frames
 
 ## Next Steps
 
-- Tap into the car's (BMW E87) PT-CAN at the FRM module via the transceiver in listen only mode. 
+- Tap into the car's (BMW E87) PT-CAN at the FRM module via the transceiver in listen only mode.
 - Filtering and outputting relevant frames to the console
-- 
