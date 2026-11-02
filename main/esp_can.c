@@ -15,7 +15,7 @@
 // FLAG FOR ENABLING BENCH TEST MODE
 // WARNING: Do not uncomment if device is connected to car's CAN bus!
 // #define BENCH_TEST_MODE
-// #define NO_OF_TEST_FRAMES 1000
+// #define PRINT_INDV_FRAMES
 
 #ifdef BENCH_TEST_MODE
     #define TWAI_RX_PIN 47
@@ -28,7 +28,6 @@
 #define CAN_OUTPUT_TASK_STACK_SIZE 4096 
 #define CAN_OUTPUT_TASK_PRIORITY 1
 
-
 #define TWAI_BITRATE 500000
 
 typedef struct {
@@ -37,43 +36,136 @@ typedef struct {
     uint8_t dlc;
     bool is_rtr;
     bool is_extended_id;
-    int64_t timestamp;
+    int32_t timestamp; // ms
 } can_frame_t;
+
+typedef struct {
+    uint8_t data[8];
+    uint8_t dlc;
+} can_frame_prev_data_t;
+
+typedef struct {
+    can_frame_t frame;
+    can_frame_prev_data_t prev;
+    bool seen;
+} can_frame_tbl_item_t;
 
 // Counter for tracking number of dropped frames (When queue is full)
 static volatile uint32_t dropped_frame_ctr;
 
 static QueueHandle_t can_frame_queue;
 
+#define CAN_FRAME_TBL_STD_ID_CNT 2048
+#define CAN_FRAME_TBL_PRINT_INTERVAL 5000000 
+
+static can_frame_tbl_item_t can_frame_tbl[CAN_FRAME_TBL_STD_ID_CNT] = {0};
+static int64_t can_frame_tbl_last_print = 0;
+
+void print_can_frame(can_frame_t *frame) {
+    char data_buf[28] = {0};
+    size_t pos = 0;
+
+    for (uint8_t i=0; i < frame->dlc; i++) {
+        int n = snprintf(data_buf + pos, sizeof(data_buf) - pos, "%02X ", frame->data[i]);
+        pos += n;
+    }
+
+    char output_buf[256] = {0};
+    snprintf(
+        output_buf, 
+        sizeof(output_buf), 
+        "Timestamp: %" PRIi32 ", ID: %03" PRIX32 ", Data Len: %u, Data: %s\n",
+        frame->timestamp,
+        frame->id,
+        frame->dlc,
+        data_buf
+    );
+
+    printf("%s", output_buf);
+}
+
+void print_can_frame_table(void) {
+    // Print the header
+    printf("|-------------------------------------------------------------------------------------------------|\n");
+    printf("| Time Since Last Change (ms) | ID  | DLC | Data                      | Previous Data             |\n");
+    printf("|-------------------------------------------------------------------------------------------------|\n");
+
+    int32_t time_of_print = esp_timer_get_time() / 1000;
+
+    // Print each entry
+    for (int i = 0; i < CAN_FRAME_TBL_STD_ID_CNT; i++) {
+
+        if (can_frame_tbl[i].seen) {
+            char data_buf[28] = {0};
+            size_t pos = 0;
+
+            for (uint8_t j=0; j < can_frame_tbl[i].frame.dlc; j++) {
+                int n = snprintf(data_buf + pos, sizeof(data_buf) - pos, "%02X ", can_frame_tbl[i].frame.data[j]);
+                pos += n;
+            }
+
+            char prev_data_buf[28] = {0};
+            pos = 0;
+
+            for (uint8_t j=0; j < can_frame_tbl[i].prev.dlc; j++) {
+                int n = snprintf(prev_data_buf + pos, sizeof(prev_data_buf) - pos, "%02X ", can_frame_tbl[i].prev.data[j]);
+                pos += n;
+            }
+            
+            printf("| %-27" PRId32 " | %03" PRIX32 " |  %u  | %-24s  | %-24s  |\n|-------------------------------------------------------------------------------------------------|\n",
+                (time_of_print - can_frame_tbl[i].frame.timestamp),
+                can_frame_tbl[i].frame.id,
+                can_frame_tbl[i].frame.dlc,
+                data_buf,
+                prev_data_buf
+            );
+        }
+    }
+}
+
 void can_output_task(void *pvParameters) {
 
     for(;;) {
         can_frame_t recd_frame;
-        if (xQueueReceive(can_frame_queue, &recd_frame, (pdMS_TO_TICKS(1000)))) {
-            char data_buf[28] = {0};
-            size_t pos = 0;
+        if (xQueueReceive(can_frame_queue, &recd_frame, pdMS_TO_TICKS(1000))) {
 
-            for (uint8_t i=0; i < recd_frame.dlc; i++) {
-                int n = snprintf(data_buf + pos, sizeof(data_buf) - pos, "%02X ", recd_frame.data[i]);
-                pos += n;
+            // Extended frames are out of scope currently
+            if (
+                recd_frame.is_extended_id ||
+                recd_frame.id >= CAN_FRAME_TBL_STD_ID_CNT
+            ) {
+                continue;
+            } 
+
+            uint32_t frame_id = recd_frame.id;
+            if (
+                memcmp(&recd_frame.data, &can_frame_tbl[frame_id].frame.data, 8) != 0 ||
+                    recd_frame.dlc == 0
+            ) {
+                if (can_frame_tbl[frame_id].seen) {
+                    memcpy(
+                        can_frame_tbl[frame_id].prev.data, 
+                        can_frame_tbl[frame_id].frame.data, 
+                        can_frame_tbl[frame_id].frame.dlc
+                    );
+                    can_frame_tbl[frame_id].prev.dlc = can_frame_tbl[frame_id].frame.dlc;
+                }
+
+                can_frame_tbl[frame_id].frame = recd_frame;
+                can_frame_tbl[frame_id].seen = true;
+
+                #ifdef PRINT_INDV_FRAMES
+                    print_can_frame(&can_frame_tbl[frame_id].frame);
+                #endif
             }
-
-            char output_buf[256] = {0};
-            snprintf(
-                output_buf, 
-                sizeof(output_buf), 
-                "Timestamp: %" PRIi64 ", ID: %" PRIX32 ", Data Len: %u, Data: %s\n",
-                recd_frame.timestamp,
-                recd_frame.id,
-                recd_frame.dlc,
-                data_buf
-            );
-
-            printf("%s", output_buf);
         }
 
-        else {
-            printf("Current Dropped Frames: %" PRIu32 "\n", dropped_frame_ctr);
+        int64_t current_time = esp_timer_get_time();
+
+        if (current_time - can_frame_tbl_last_print > CAN_FRAME_TBL_PRINT_INTERVAL) {
+            print_can_frame_table();
+            printf("  Current Dropped Frames: %" PRIu32 "\n\n", dropped_frame_ctr);
+            can_frame_tbl_last_print = current_time;
         }
     }
 }
@@ -93,7 +185,7 @@ static bool twai_rx_cb(twai_node_handle_t node_hdl, const twai_rx_done_event_dat
             .dlc = twai_rx_frame.header.dlc,
             .is_rtr = twai_rx_frame.header.rtr,
             .is_extended_id = twai_rx_frame.header.ide,
-            .timestamp = esp_timer_get_time()
+            .timestamp = esp_timer_get_time() / 1000
         };
 
         size_t data_len = twai_rx_frame.header.dlc < sizeof(can_rx_frame.data) ? twai_rx_frame.header.dlc : sizeof(can_rx_frame.data);
@@ -169,7 +261,7 @@ void app_main(void)
     ESP_ERROR_CHECK(twai_node_enable(twai_node_hdl));
 
     #ifdef BENCH_TEST_MODE
-        transmit_test_twai_frames(NO_OF_TEST_FRAMES, twai_node_hdl);
+        transmit_test_twai_frames(CAN_TEST_FRAME_DATA_BYTE_CHG, twai_node_hdl);
     #endif
 
 }
